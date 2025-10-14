@@ -1,13 +1,33 @@
-# 必要なライブラリをインポート
-import os, boto3, json
+import os
+import json
+import boto3
 import streamlit as st
 from dotenv import load_dotenv
 
-# .envファイルから環境変数をロード
-load_dotenv(override=True)
+# ----------------------------------------------------------
+# ✅ 環境変数の読み込み
+# ----------------------------------------------------------
+if os.path.exists(".env"):
+    load_dotenv()  # ローカル環境用
+
+region = os.getenv("AWS_DEFAULT_REGION", "ap-southeast-2")
+
+# ----------------------------------------------------------
+# ✅ Bedrock AgentCore クライアントの初期化
+# ----------------------------------------------------------
+try:
+    agentcore = boto3.client("bedrock-agentcore", region_name=region)
+except Exception as e:
+    st.error(f"❌ Bedrock AgentCoreクライアントの初期化に失敗しました: {e}")
+    st.stop()
+
+# ----------------------------------------------------------
+# ✅ UI構成（デザインはそのまま）
+# ----------------------------------------------------------
 
 # サイドバーで設定を入力
 with st.sidebar:
+    st.header("⚙️ 設定")
     agent_runtime_arn = st.text_input("AgentCoreランタイムのARN")
     tavily_api_key = st.text_input("Tavily APIキー", type="password")
 
@@ -17,59 +37,34 @@ st.write("Strands AgentsがMCPサーバーを使って情報収集します！")
 
 # チャットボックスを描画
 if prompt := st.chat_input("メッセージを入力してね"):
-    # ユーザーのプロンプトを表示
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    if not agent_runtime_arn:
+        st.warning("⚠️ AgentCoreランタイムARNを入力してください。")
+        st.stop()
 
-    # エージェントの回答を表示
-    with st.chat_message("assistant"):
-        # AgentCoreランタイムを呼び出し
-        agentcore = boto3.client('bedrock-agentcore')
-        payload = json.dumps({
-            "prompt": prompt,
-            "tavily_api_key": tavily_api_key
-        })
-        response = agentcore.invoke_agent_runtime(
+    st.chat_message("user").write(prompt)
+    st.chat_message("assistant").write("🔎 検索中...")
+
+    try:
+        # ------------------------------------------------------
+        # ✅ Bedrock AgentCoreを呼び出し
+        # ------------------------------------------------------
+        payload = {
+            "inputText": prompt,
+            "sessionAttributes": {},
+            "enableTrace": False
+        }
+
+        response = agentcore.invoke_agent(
             agentRuntimeArn=agent_runtime_arn,
-            payload=payload.encode()
+            inputText=json.dumps(payload)
         )
 
-        ### ここから下はストリーミングレスポンスの処理 ------------------------------------------
-        container = st.container()
-        text_holder = container.empty()
-        buffer = ""
+        # ------------------------------------------------------
+        # ✅ 結果表示
+        # ------------------------------------------------------
+        output = response.get("completion", "（応答がありません）")
+        st.chat_message("assistant").write(output)
 
-        # レスポンスを1行ずつチェック
-        for line in response["response"].iter_lines():
-            if line and line.decode("utf-8").startswith("data: "):
-                data = line.decode("utf-8")[6:]
-
-                # 文字列コンテンツの場合は無視
-                if data.startswith('"') or data.startswith("'"):
-                    continue
-
-                # 読み込んだ行をJSONに変換
-                event = json.loads(data)
-
-                # ツール利用を検出
-                if "event" in event and "contentBlockStart" in event["event"]:
-                    if "toolUse" in event["event"]["contentBlockStart"].get("start", {}):
-                        # 現在のテキストを確定
-                        if buffer:
-                            text_holder.markdown(buffer)
-                            buffer = ""
-                        # ツールステータスを表示
-                        container.info("🔍 Tavily検索ツールを利用しています")
-                        text_holder = container.empty()
-
-                # テキストコンテンツを検出
-                if "data" in event and isinstance(event["data"], str):
-                    buffer += event["data"]
-                    text_holder.markdown(buffer)
-                elif "event" in event and "contentBlockDelta" in event["event"]:
-                    buffer += event["event"]["contentBlockDelta"]["delta"].get("text", "")
-                    text_holder.markdown(buffer)
-
-        # 最後に残ったテキストを表示
-        text_holder.markdown(buffer)
-        ### ------------------------------------------------------------------------------
+    except Exception as e:
+        st.error("❌ エージェント呼び出し中にエラーが発生しました")
+        st.code(str(e))
