@@ -18,7 +18,7 @@ region = os.getenv("AWS_DEFAULT_REGION", "ap-southeast-2")
 agentcore = boto3.client("bedrock-agentcore", region_name=region)
 
 # ----------------------------------------------------------
-# ✅ UI構成（デザインはそのまま）
+# ✅ UI構成（デザインそのまま）
 # ----------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -42,9 +42,11 @@ if prompt := st.chat_input("メッセージを入力してね"):
         try:
             container = st.container()
             text_holder = container.empty()
-            text_holder.markdown("🔎 検索中...")
+            buffer = ""
 
-            # ✅ invoke_agent_runtime (同期呼び出し)
+            # ----------------------------------------------------------
+            # ✅ invoke_agent_runtime（StreamingBodyレスポンス）
+            # ----------------------------------------------------------
             payload = json.dumps({
                 "inputText": prompt,
                 "tavily_api_key": tavily_api_key
@@ -54,21 +56,45 @@ if prompt := st.chat_input("メッセージを入力してね"):
                 agentRuntimeArn=agent_runtime_arn,
                 payload=payload.encode("utf-8"),
                 contentType="application/json",
-                accept="application/json"
+                accept="text/event-stream"
             )
 
-            # ✅ 応答の中身を判定して抽出
-            output = None
-            if "body" in response:
-                body = json.loads(response["body"].read())
-                output = body.get("outputText") or body
-            elif "responseBody" in response:
-                body = response["responseBody"]
-                output = body.get("outputText") or body
-            else:
-                output = response
+            # ----------------------------------------------------------
+            # ✅ ストリーミングBodyを1行ずつ読み取り
+            # ----------------------------------------------------------
+            stream = response["response"]
+            for line in stream.iter_lines():
+                if not line:
+                    continue
+                if line.startswith(b"data: "):
+                    data = line.decode("utf-8")[6:]
+                    try:
+                        event = json.loads(data)
+                    except Exception:
+                        continue
 
-            text_holder.markdown(output)
+                    # delta（テキストの一部）を受け取る
+                    if "delta" in event:
+                        delta_text = event["delta"].get("text", "")
+                        buffer += delta_text
+                        text_holder.markdown(buffer)
+
+                    # contentBlockDelta形式にも対応
+                    elif "event" in event and "contentBlockDelta" in event["event"]:
+                        delta_text = event["event"]["contentBlockDelta"]["delta"].get("text", "")
+                        buffer += delta_text
+                        text_holder.markdown(buffer)
+
+                    # toolUseイベント
+                    elif "event" in event and "contentBlockStart" in event["event"]:
+                        if "toolUse" in event["event"]["contentBlockStart"].get("start", {}):
+                            container.info("🔍 Tavily検索ツールを利用中…")
+
+            # ----------------------------------------------------------
+            # ✅ 最後に確定表示
+            # ----------------------------------------------------------
+            if buffer:
+                text_holder.markdown(buffer)
 
         except Exception as e:
             st.error("❌ エージェント呼び出し中にエラーが発生しました")
