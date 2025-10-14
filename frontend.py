@@ -11,14 +11,10 @@ if os.path.exists(".env"):
     load_dotenv()
 
 region = os.getenv("AWS_DEFAULT_REGION", "ap-southeast-2")
-
-# ----------------------------------------------------------
-# ✅ Bedrock AgentCore クライアント
-# ----------------------------------------------------------
 agentcore = boto3.client("bedrock-agentcore", region_name=region)
 
 # ----------------------------------------------------------
-# ✅ UI構成（デザインそのまま）
+# ✅ UI構成
 # ----------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -42,10 +38,11 @@ if prompt := st.chat_input("メッセージを入力してね"):
         try:
             container = st.container()
             text_holder = container.empty()
+            debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
             # ----------------------------------------------------------
-            # ✅ invoke_agent_runtime（StreamingBodyレスポンス）
+            # ✅ invoke_agent_runtime 呼び出し
             # ----------------------------------------------------------
             payload = json.dumps({
                 "inputText": prompt,
@@ -59,10 +56,8 @@ if prompt := st.chat_input("メッセージを入力してね"):
                 accept="text/event-stream"
             )
 
-            # ----------------------------------------------------------
-            # ✅ ストリーミングBodyを1行ずつ読み取り
-            # ----------------------------------------------------------
             stream = response["response"]
+
             for line in stream.iter_lines():
                 if not line:
                     continue
@@ -73,28 +68,23 @@ if prompt := st.chat_input("メッセージを入力してね"):
                     except Exception:
                         continue
 
-                    # delta（テキストの一部）を受け取る
+                    # デバッグ表示
+                    debug_log.write(event)
+
+                    # delta or completion
                     if "delta" in event:
-                        delta_text = event["delta"].get("text", "")
-                        buffer += delta_text
+                        text = event["delta"].get("text", "")
+                        buffer += text
                         text_holder.markdown(buffer)
-
-                    # contentBlockDelta形式にも対応
-                    elif "event" in event and "contentBlockDelta" in event["event"]:
-                        delta_text = event["event"]["contentBlockDelta"]["delta"].get("text", "")
-                        buffer += delta_text
+                    elif "outputText" in event:
+                        buffer += event["outputText"]
                         text_holder.markdown(buffer)
+                    elif "eventType" in event and event["eventType"] == "messageStop":
+                        text_holder.markdown(buffer)
+                        break
 
-                    # toolUseイベント
-                    elif "event" in event and "contentBlockStart" in event["event"]:
-                        if "toolUse" in event["event"]["contentBlockStart"].get("start", {}):
-                            container.info("🔍 Tavily検索ツールを利用中…")
-
-            # ----------------------------------------------------------
-            # ✅ 最後に確定表示
-            # ----------------------------------------------------------
-            if buffer:
-                text_holder.markdown(buffer)
+            if not buffer:
+                st.warning("⚠️ 応答本文が空でした。ARNまたはAgentのロジックを確認してください。")
 
         except Exception as e:
             st.error("❌ エージェント呼び出し中にエラーが発生しました")
