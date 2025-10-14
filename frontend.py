@@ -41,12 +41,19 @@ if prompt := st.chat_input("メッセージを入力してね"):
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
-            # ✅ 正しい payload 構造（user role付き）
+            # ✅ 正しいpayload構造（Converse準拠）
             payload = json.dumps({
+                "inferenceConfig": {
+                    "maxTokens": 512
+                },
                 "messages": [
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": [
+                            {
+                                "text": prompt
+                            }
+                        ]
                     }
                 ],
                 "sessionAttributes": {
@@ -61,6 +68,9 @@ if prompt := st.chat_input("メッセージを入力してね"):
                 accept="text/event-stream"
             )
 
+            # ----------------------------------------------------------
+            # ✅ ストリームを処理
+            # ----------------------------------------------------------
             stream = response["response"]
 
             for line in stream.iter_lines():
@@ -76,12 +86,12 @@ if prompt := st.chat_input("メッセージを入力してね"):
                     debug_log.write(event)
 
                     if "delta" in event:
-                        delta_text = event["delta"].get("text", "")
-                        buffer += delta_text
+                        text = event["delta"].get("text", "")
+                        buffer += text
                         text_holder.markdown(buffer)
                     elif "event" in event and "contentBlockDelta" in event["event"]:
-                        delta_text = event["event"]["contentBlockDelta"]["delta"].get("text", "")
-                        buffer += delta_text
+                        text = event["event"]["contentBlockDelta"]["delta"].get("text", "")
+                        buffer += text
                         text_holder.markdown(buffer)
 
             if not buffer:
