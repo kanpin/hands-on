@@ -41,21 +41,21 @@ if prompt := st.chat_input("メッセージを入力してね"):
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
-            # ✅ 正しいpayload構造（Converse準拠）
+            # ✅ ConverseStream v2 形式 payload
             payload = json.dumps({
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"text": prompt}
+                            ]
+                        }
+                    ]
+                },
                 "inferenceConfig": {
                     "maxTokens": 512
                 },
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ],
                 "sessionAttributes": {
                     "tavily_api_key": tavily_api_key or ""
                 }
@@ -68,9 +68,6 @@ if prompt := st.chat_input("メッセージを入力してね"):
                 accept="text/event-stream"
             )
 
-            # ----------------------------------------------------------
-            # ✅ ストリームを処理
-            # ----------------------------------------------------------
             stream = response["response"]
 
             for line in stream.iter_lines():
