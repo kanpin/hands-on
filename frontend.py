@@ -42,14 +42,18 @@ if prompt := st.chat_input("メッセージを入力してね"):
     st.chat_message("assistant").write("🔎 検索中...")
 
     try:
-        # ✅ invoke_agent_runtimeを利用
+        # ✅ invoke_agent_runtimeの正しい呼び出し
         response = agentcore.invoke_agent_runtime(
             agentRuntimeArn=agent_runtime_arn,
-            inputText=prompt
+            payload=json.dumps({"inputText": prompt}),
+            contentType="application/json",
+            accept="application/json"
         )
 
         # ✅ 応答の抽出
-        output = response.get("completion", "（応答がありません）")
+        body = json.loads(response["body"].read())
+        output = body.get("outputText", "（応答がありません）")
+
         st.chat_message("assistant").write(output)
 
     except Exception as e:
