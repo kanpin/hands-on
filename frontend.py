@@ -41,12 +41,17 @@ if prompt := st.chat_input("メッセージを入力してね"):
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
-            # ----------------------------------------------------------
-            # ✅ invoke_agent_runtime 呼び出し
-            # ----------------------------------------------------------
+            # ✅ 正しい payload 構造（user role付き）
             payload = json.dumps({
-                "inputText": prompt,
-                "tavily_api_key": tavily_api_key
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "sessionAttributes": {
+                    "tavily_api_key": tavily_api_key or ""
+                }
             })
 
             response = agentcore.invoke_agent_runtime(
@@ -68,23 +73,21 @@ if prompt := st.chat_input("メッセージを入力してね"):
                     except Exception:
                         continue
 
-                    # デバッグ表示
                     debug_log.write(event)
 
-                    # delta or completion
                     if "delta" in event:
-                        text = event["delta"].get("text", "")
-                        buffer += text
+                        delta_text = event["delta"].get("text", "")
+                        buffer += delta_text
                         text_holder.markdown(buffer)
-                    elif "outputText" in event:
-                        buffer += event["outputText"]
+                    elif "event" in event and "contentBlockDelta" in event["event"]:
+                        delta_text = event["event"]["contentBlockDelta"]["delta"].get("text", "")
+                        buffer += delta_text
                         text_holder.markdown(buffer)
-                    elif "eventType" in event and event["eventType"] == "messageStop":
-                        text_holder.markdown(buffer)
-                        break
 
             if not buffer:
-                st.warning("⚠️ 応答本文が空でした。ARNまたはAgentのロジックを確認してください。")
+                st.warning("⚠️ 応答本文が空でした。")
+            else:
+                text_holder.markdown(buffer)
 
         except Exception as e:
             st.error("❌ エージェント呼び出し中にエラーが発生しました")
