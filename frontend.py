@@ -18,7 +18,7 @@ region = os.getenv("AWS_DEFAULT_REGION", "ap-southeast-2")
 agentcore = boto3.client("bedrock-agentcore", region_name=region)
 
 # ----------------------------------------------------------
-# ✅ UI構成（デザインそのまま）
+# ✅ UI構成（デザインはそのまま）
 # ----------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -36,52 +36,39 @@ if prompt := st.chat_input("メッセージを入力してね"):
         st.warning("⚠️ AgentCoreランタイムARNを入力してください。")
         st.stop()
 
-    # ユーザー入力を表示
     st.chat_message("user").write(prompt)
 
-    # エージェントの回答をストリーム表示
     with st.chat_message("assistant"):
         try:
             container = st.container()
             text_holder = container.empty()
-            buffer = ""
+            text_holder.markdown("🔎 検索中...")
 
-            # ----------------------------------------------------------
-            # ✅ invoke_agent_runtime_stream() でリアルタイム応答
-            # ----------------------------------------------------------
+            # ✅ invoke_agent_runtime (同期呼び出し)
             payload = json.dumps({
                 "inputText": prompt,
                 "tavily_api_key": tavily_api_key
             })
 
-            response = agentcore.invoke_agent_runtime_stream(
+            response = agentcore.invoke_agent_runtime(
                 agentRuntimeArn=agent_runtime_arn,
                 payload=payload.encode("utf-8"),
                 contentType="application/json",
                 accept="application/json"
             )
 
-            # レスポンスストリームを逐次処理
-            for event in response.get("responseStream", []):
-                # --- 出力テキストが届いたとき ---
-                if "chunk" in event:
-                    chunk = event["chunk"]
-                    try:
-                        data = json.loads(chunk.get("bytes", b"{}").decode("utf-8"))
-                        if "outputText" in data:
-                            buffer += data["outputText"]
-                            text_holder.markdown(buffer)
-                    except Exception:
-                        continue
+            # ✅ 応答の中身を判定して抽出
+            output = None
+            if "body" in response:
+                body = json.loads(response["body"].read())
+                output = body.get("outputText") or body
+            elif "responseBody" in response:
+                body = response["responseBody"]
+                output = body.get("outputText") or body
+            else:
+                output = response
 
-                # --- エラーイベント ---
-                elif "error" in event:
-                    err = event["error"]
-                    st.error(f"❌ AgentCoreエラー: {err.get('message', str(err))}")
-
-            # 最後に残ったテキストを確定表示
-            if buffer:
-                text_holder.markdown(buffer)
+            text_holder.markdown(output)
 
         except Exception as e:
             st.error("❌ エージェント呼び出し中にエラーが発生しました")
