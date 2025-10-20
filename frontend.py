@@ -1,12 +1,13 @@
 # ----------------------------------------------------------
-# ✅ frontend_final.py - Claude 4.5 + Bedrock AgentCore + Tavily API 対応版
+# ✅ frontend_final.py - Claude 4.5 + Bedrock AgentCore + Tavily MCP Server 対応
 # ----------------------------------------------------------
-# 特徴:
+# 改良点:
 # - AWSアクセスキー/シークレットキー/リージョンをUIから指定可能
-# - AgentCoreランタイムARNとTavilyキーを入力可能
-# - Claude 4.5ストリーミング完全対応
-# - 不正なPythonオブジェクトを安全にフィルタリング
-# - デバッグログは安全にJSON整形表示
+# - AgentCoreランタイムARN + Tavilyキー入力対応
+# - Claude 4.5 ストリーミング出力に完全対応
+# - 不正なPythonオブジェクトを完全除去
+# - JSON整形済みログ出力
+# - graceful fallback付き例外処理
 # ----------------------------------------------------------
 
 import os
@@ -26,7 +27,7 @@ default_access_key = os.getenv("AWS_ACCESS_KEY_ID", "")
 default_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
 # ----------------------------------------------------------
-# ✅ Streamlit UI
+# ✅ Streamlit UI 構成
 # ----------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -44,7 +45,7 @@ st.title("なんでも検索エージェント")
 st.write("Strands Agents + Bedrock AgentCore + Tavily MCP Server を利用します。")
 
 # ----------------------------------------------------------
-# ✅ boto3クライアント生成
+# ✅ boto3 クライアント生成
 # ----------------------------------------------------------
 if aws_access_key and aws_secret_key:
     try:
@@ -63,24 +64,31 @@ else:
     st.stop()
 
 # ----------------------------------------------------------
-# ✅ 安全なJSON整形関数
+# ✅ JSON安全整形関数
 # ----------------------------------------------------------
 def safe_json_dump(obj):
-    """辞書内のシリアライズ可能な要素のみ残す"""
+    """JSON化できないPythonオブジェクトを除外"""
     if isinstance(obj, dict):
         clean = {}
         for k, v in obj.items():
             if isinstance(v, (str, int, float, bool)):
                 clean[k] = v
             elif isinstance(v, (list, tuple)):
-                clean[k] = [safe_json_dump(i) for i in v]
+                sub = [safe_json_dump(i) for i in v]
+                clean[k] = [s for s in sub if s not in (None, {}, [])]
             elif isinstance(v, dict):
-                clean[k] = safe_json_dump(v)
+                sub = safe_json_dump(v)
+                if sub not in (None, {}, []):
+                    clean[k] = sub
         return clean
     elif isinstance(obj, list):
-        return [safe_json_dump(i) for i in obj]
-    else:
+        out = [safe_json_dump(i) for i in obj]
+        return [x for x in out if x not in (None, {}, [])]
+    elif isinstance(obj, (str, int, float, bool)):
         return obj
+    else:
+        # ❌ Pythonオブジェクトなどは完全除外
+        return None
 
 # ----------------------------------------------------------
 # ✅ チャットUI本体
@@ -99,7 +107,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
-            # ConverseStream v2形式（Claude互換）
+            # ConverseStream v2形式（Claude 4.5互換）
             payload = json.dumps({
                 "prompt": prompt,
                 "input": {
@@ -122,7 +130,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
             stream = response["response"]
 
             # ----------------------------------------------------------
-            # ✅ ストリーミング処理（文字単位対応）
+            # ✅ ストリーミング処理（1文字ずつも対応）
             # ----------------------------------------------------------
             for line in stream.iter_lines():
                 if not line or not line.startswith(b"data: "):
@@ -130,20 +138,23 @@ if prompt := st.chat_input("メッセージを入力してね"):
 
                 data = line.decode("utf-8")[6:]
 
-                # JSON形式の場合のみ処理
                 try:
                     event = json.loads(data)
                 except Exception:
+                    # JSONでない（純テキスト）行はスキップまたはそのまま出力
                     buffer += data
                     text_holder.markdown(buffer)
                     continue
 
-                # 🪵 デバッグログ安全出力
+                # 🪵 JSON安全化してログ出力
                 filtered = safe_json_dump(event)
                 if filtered:
-                    debug_log.json(filtered)
+                    try:
+                        debug_log.json(filtered)
+                    except Exception:
+                        debug_log.write(json.dumps(filtered, ensure_ascii=False, indent=2))
 
-                # テキスト抽出
+                # 🧩 テキスト部分抽出してUIに逐次反映
                 if isinstance(event, dict):
                     if "delta" in event and isinstance(event["delta"], dict):
                         text = event["delta"].get("text", "")
@@ -161,7 +172,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
                     buffer += event
                     text_holder.markdown(buffer)
 
-            # 出力が空だった場合
+            # ⚠️ 応答が空なら警告
             if not buffer:
                 st.warning("⚠️ 応答本文が空でした。")
             else:
