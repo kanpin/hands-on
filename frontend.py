@@ -1,6 +1,6 @@
 # ----------------------------------------------------------
-# ✅ frontend_filtered_safe.py
-# 中間イベントを除外し、最終「message」イベントだけ出力（完全対応版）
+# ✅ frontend_filtered_safe_v2.py
+# 文字列メッセージ形式にも完全対応版
 # ----------------------------------------------------------
 import os
 import json
@@ -94,27 +94,35 @@ if prompt := st.chat_input("質問を入力してください"):
                     final_json = event
 
             # ----------------------------------------------------------
-            # ✅ 最終イベント出力（どの形式でも安全）
+            # ✅ 最終イベント出力（文字列型も対応）
             # ----------------------------------------------------------
             if final_json:
-                msg = final_json.get("message", {})
-                content = msg.get("content", "")
-                text_output = ""
+                msg = final_json.get("message")
 
-                # contentがリストの場合
-                if isinstance(content, list) and len(content) > 0:
-                    first = content[0]
-                    if isinstance(first, dict) and "text" in first:
-                        text_output = first["text"]
-                # contentが文字列の場合
-                elif isinstance(content, str):
-                    text_output = content
+                # messageが文字列ならそのまま出す
+                if isinstance(msg, str):
+                    text_output = msg
+
+                # messageが辞書形式なら中身を解析
+                elif isinstance(msg, dict):
+                    content = msg.get("content", "")
+                    if isinstance(content, list) and len(content) > 0:
+                        first = content[0]
+                        if isinstance(first, dict) and "text" in first:
+                            text_output = first["text"]
+                        else:
+                            text_output = json.dumps(first, ensure_ascii=False)
+                    elif isinstance(content, str):
+                        text_output = content
+                    else:
+                        text_output = json.dumps(content, ensure_ascii=False)
                 else:
-                    text_output = json.dumps(content, ensure_ascii=False)
+                    text_output = str(msg)
 
                 st.success("✅ 最終出力を取得しました")
                 text_holder.markdown(text_output)
                 debug_log.code(json.dumps(final_json, ensure_ascii=False, indent=2), language="json")
+
             else:
                 st.warning("⚠️ 有効な最終イベントを取得できませんでした。")
 
