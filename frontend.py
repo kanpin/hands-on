@@ -1,3 +1,14 @@
+# ----------------------------------------------------------
+# ✅ frontend_final.py - Claude 4.5 + Bedrock AgentCore + Tavily API 対応版
+# ----------------------------------------------------------
+# 特徴:
+# - AWSアクセスキー/シークレットキー/リージョンをUIから指定可能
+# - AgentCoreランタイムARNとTavilyキーを入力可能
+# - Claude 4.5ストリーミング完全対応
+# - 不正なPythonオブジェクトを安全にフィルタリング
+# - デバッグログは安全にJSON整形表示
+# ----------------------------------------------------------
+
 import os
 import json
 import boto3
@@ -15,7 +26,7 @@ default_access_key = os.getenv("AWS_ACCESS_KEY_ID", "")
 default_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
 # ----------------------------------------------------------
-# ✅ UI構成
+# ✅ Streamlit UI
 # ----------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -30,7 +41,7 @@ with st.sidebar:
     tavily_api_key = st.text_input("Tavily APIキー", type="password")
 
 st.title("なんでも検索エージェント")
-st.write("Strands AgentsがMCPサーバーを使って情報収集します！")
+st.write("Strands Agents + Bedrock AgentCore + Tavily MCP Server を利用します。")
 
 # ----------------------------------------------------------
 # ✅ boto3クライアント生成
@@ -52,7 +63,27 @@ else:
     st.stop()
 
 # ----------------------------------------------------------
-# ✅ チャットUI
+# ✅ 安全なJSON整形関数
+# ----------------------------------------------------------
+def safe_json_dump(obj):
+    """辞書内のシリアライズ可能な要素のみ残す"""
+    if isinstance(obj, dict):
+        clean = {}
+        for k, v in obj.items():
+            if isinstance(v, (str, int, float, bool)):
+                clean[k] = v
+            elif isinstance(v, (list, tuple)):
+                clean[k] = [safe_json_dump(i) for i in v]
+            elif isinstance(v, dict):
+                clean[k] = safe_json_dump(v)
+        return clean
+    elif isinstance(obj, list):
+        return [safe_json_dump(i) for i in obj]
+    else:
+        return obj
+
+# ----------------------------------------------------------
+# ✅ チャットUI本体
 # ----------------------------------------------------------
 if prompt := st.chat_input("メッセージを入力してね"):
     if not agent_runtime_arn:
@@ -68,13 +99,19 @@ if prompt := st.chat_input("メッセージを入力してね"):
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
+            # ConverseStream v2形式（Claude互換）
             payload = json.dumps({
                 "prompt": prompt,
-                "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
+                "input": {
+                    "messages": [
+                        {"role": "user", "content": [{"text": prompt}]}
+                    ]
+                },
                 "inferenceConfig": {"maxTokens": 512},
                 "sessionAttributes": {"tavily_api_key": tavily_api_key or ""}
             })
 
+            # ランタイム呼び出し
             response = agentcore.invoke_agent_runtime(
                 agentRuntimeArn=agent_runtime_arn,
                 payload=payload.encode("utf-8"),
@@ -84,31 +121,35 @@ if prompt := st.chat_input("メッセージを入力してね"):
 
             stream = response["response"]
 
+            # ----------------------------------------------------------
+            # ✅ ストリーミング処理（文字単位対応）
+            # ----------------------------------------------------------
             for line in stream.iter_lines():
                 if not line or not line.startswith(b"data: "):
                     continue
 
                 data = line.decode("utf-8")[6:]
 
+                # JSON形式の場合のみ処理
                 try:
                     event = json.loads(data)
                 except Exception:
-                    # 純テキスト
                     buffer += data
                     text_holder.markdown(buffer)
                     continue
 
-                # 💡 debug_logに整形して出力
-                debug_log.json(event)
+                # 🪵 デバッグログ安全出力
+                filtered = safe_json_dump(event)
+                if filtered:
+                    debug_log.json(filtered)
 
+                # テキスト抽出
                 if isinstance(event, dict):
-                    # delta形式
                     if "delta" in event and isinstance(event["delta"], dict):
                         text = event["delta"].get("text", "")
                         buffer += text
                         text_holder.markdown(buffer)
 
-                    # contentBlockDelta形式
                     elif "event" in event and "contentBlockDelta" in event["event"]:
                         delta = event["event"]["contentBlockDelta"]["delta"]
                         if isinstance(delta, dict):
@@ -120,6 +161,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
                     buffer += event
                     text_holder.markdown(buffer)
 
+            # 出力が空だった場合
             if not buffer:
                 st.warning("⚠️ 応答本文が空でした。")
             else:
