@@ -10,19 +10,47 @@ from dotenv import load_dotenv
 if os.path.exists(".env"):
     load_dotenv()
 
-region = os.getenv("AWS_DEFAULT_REGION", "ap-southeast-2")
-agentcore = boto3.client("bedrock-agentcore", region_name=region)
+# 既定値を環境変数から取得
+default_region = os.getenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+default_access_key = os.getenv("AWS_ACCESS_KEY_ID", "")
+default_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
 # ----------------------------------------------------------
 # ✅ UI構成
 # ----------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ 設定")
-    agent_runtime_arn = st.text_input("AgentCoreランタイムのARN")
+
+    st.subheader("🔐 AWS 認証情報")
+    aws_access_key = st.text_input("AWS Access Key ID", value=default_access_key)
+    aws_secret_key = st.text_input("AWS Secret Access Key", value=default_secret_key, type="password")
+    aws_region = st.text_input("リージョン", value=default_region)
+
+    st.subheader("🤖 AgentCore 設定")
+    agent_runtime_arn = st.text_input("AgentCore ランタイム ARN")
     tavily_api_key = st.text_input("Tavily APIキー", type="password")
 
 st.title("なんでも検索エージェント")
 st.write("Strands AgentsがMCPサーバーを使って情報収集します！")
+
+# ----------------------------------------------------------
+# ✅ boto3クライアントの動的生成
+# ----------------------------------------------------------
+if aws_access_key and aws_secret_key:
+    try:
+        agentcore = boto3.client(
+            "bedrock-agentcore",
+            region_name=aws_region,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key
+        )
+    except Exception as e:
+        st.error("❌ AWS認証情報が無効です。")
+        st.code(str(e))
+        st.stop()
+else:
+    st.warning("⚠️ AWS認証情報を入力してください。")
+    st.stop()
 
 # ----------------------------------------------------------
 # ✅ チャットボックス
@@ -45,20 +73,11 @@ if prompt := st.chat_input("メッセージを入力してね"):
             payload = json.dumps({
                 "input": {
                     "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"text": prompt}
-                            ]
-                        }
+                        {"role": "user", "content": [{"text": prompt}]}
                     ]
                 },
-                "inferenceConfig": {
-                    "maxTokens": 512
-                },
-                "sessionAttributes": {
-                    "tavily_api_key": tavily_api_key or ""
-                }
+                "inferenceConfig": {"maxTokens": 512},
+                "sessionAttributes": {"tavily_api_key": tavily_api_key or ""}
             })
 
             response = agentcore.invoke_agent_runtime(
@@ -82,6 +101,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
 
                     debug_log.write(event)
 
+                    # delta更新時のストリーム描画
                     if "delta" in event:
                         text = event["delta"].get("text", "")
                         buffer += text
