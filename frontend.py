@@ -1,7 +1,5 @@
 # ----------------------------------------------------------
-# ✅ frontend_final_assistant_only_safe_v3.py
 # Claude 4.5 + Bedrock AgentCore + Tavily MCP Server 対応
-# 「'str' object has no attribute 'get'」完全吸収版
 # ----------------------------------------------------------
 import os
 import json
@@ -35,7 +33,7 @@ with st.sidebar:
     tavily_api_key = st.text_input("Tavily APIキー", type="password")
 
 st.title("なんでも検索エージェント")
-st.write("中間イベントを除外し、最終的な assistant の回答のみを出力します。")
+st.write("Strands Agents + Bedrock AgentCore + Tavily MCP Server を利用します。")
 
 # ----------------------------------------------------------
 # ✅ boto3 クライアント生成
@@ -57,23 +55,6 @@ else:
     st.stop()
 
 # ----------------------------------------------------------
-# ✅ 多段JSON安全パース関数
-# ----------------------------------------------------------
-def deep_json_parse(data):
-    """
-    何重にJSON文字列化されていても、辞書になるまで再帰的にjson.loads()する
-    """
-    if not isinstance(data, str):
-        return data
-    try:
-        parsed = json.loads(data)
-        if isinstance(parsed, str):
-            return deep_json_parse(parsed)
-        return parsed
-    except Exception:
-        return data
-
-# ----------------------------------------------------------
 # ✅ チャットUI
 # ----------------------------------------------------------
 if prompt := st.chat_input("メッセージを入力してね"):
@@ -89,7 +70,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
             text_holder = container.empty()
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
 
-            # ConverseStream v2形式
+            # ConverseStream v2形式（Claude 4.5互換）
             payload = json.dumps({
                 "prompt": prompt,
                 "input": {
@@ -112,51 +93,60 @@ if prompt := st.chat_input("メッセージを入力してね"):
             stream = response["response"]
 
             # ----------------------------------------------------------
-            # ✅ "message" イベントだけ抽出
+            # ✅ 最終回答のみ抽出
             # ----------------------------------------------------------
             final_json = None
             for line in stream.iter_lines():
                 if not line or not line.startswith(b"data: "):
                     continue
+
                 data = line.decode("utf-8")[6:]
                 try:
                     event = json.loads(data)
                 except Exception:
                     continue
+
+                # 🧩 "message" キーがあるものだけ保持
                 if "message" in event:
                     final_json = event
 
             # ----------------------------------------------------------
-            # ✅ assistant の回答のみ抽出（何重でもOK）
+            # ✅ assistant の最終メッセージだけ出力
             # ----------------------------------------------------------
             if final_json:
-                raw_msg = final_json.get("message", "")
-                msg_obj = deep_json_parse(raw_msg)
-
-                # message配下の構造を解析
+                msg = final_json.get("message")
                 text_output = ""
-                if isinstance(msg_obj, dict):
-                    if msg_obj.get("role") == "assistant":
-                        content = msg_obj.get("content", [])
-                        if isinstance(content, list):
-                            for block in content:
-                                if isinstance(block, dict) and "text" in block:
-                                    text_output += block["text"] + "\n"
-                        elif isinstance(content, str):
-                            text_output = content
-                elif isinstance(msg_obj, str):
-                    text_output = msg_obj
 
-                if text_output.strip():
-                    text_holder.markdown(text_output.strip())
-                    st.success("✅ assistantの最終回答を取得しました。")
+                # messageが文字列の場合（JSON埋め込みの可能性あり）
+                if isinstance(msg, str):
+                    try:
+                        msg_obj = json.loads(msg)
+                    except Exception:
+                        msg_obj = {"content": [{"text": msg}]}
                 else:
-                    st.warning("⚠️ assistantメッセージが空、または構造が異なります。")
+                    msg_obj = msg
 
-                # 🪵 ログ出力
+                # content抽出
+                if isinstance(msg_obj, dict):
+                    role = msg_obj.get("role", "")
+                    content = msg_obj.get("content", [])
+                    if role == "assistant" and isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and "text" in block:
+                                text_output += block["text"] + "\n"
+
+                # 出力処理
+                if text_output:
+                    text_holder.markdown(text_output)
+                    st.success("✅ 回答を取得しました。")
+                else:
+                    st.warning("⚠️ 有効なassistant応答が見つかりませんでした。")
+
+                # デバッグログ出力
                 debug_log.code(json.dumps(final_json, ensure_ascii=False, indent=2), language="json")
+
             else:
-                st.warning("⚠️ 最終 'message' イベントが取得できませんでした。")
+                st.warning("⚠️ 最終イベント（message）が取得できませんでした。")
 
         except Exception as e:
             st.error("❌ エージェント呼び出し中にエラーが発生しました")
