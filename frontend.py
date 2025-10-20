@@ -1,5 +1,6 @@
 # ----------------------------------------------------------
-# ✅ frontend_filtered.py
+# ✅ frontend_filtered_safe.py
+# 中間イベントを除外し、最終「message」イベントだけ出力（完全対応版）
 # ----------------------------------------------------------
 import os
 import json
@@ -76,7 +77,6 @@ if prompt := st.chat_input("質問を入力してください"):
             )
 
             stream = response["response"]
-
             final_json = None
 
             for line in stream.iter_lines():
@@ -87,19 +87,33 @@ if prompt := st.chat_input("質問を入力してください"):
                 try:
                     event = json.loads(data)
                 except Exception:
-                    continue  # ← JSON化できない中間イベントは完全スキップ
+                    continue  # 不完全JSONは無視
 
-                # 「message」キーを含む最終イベントだけ残す
+                # 「message」キーがあるものだけ残す
                 if "message" in event:
                     final_json = event
 
             # ----------------------------------------------------------
-            # ✅ 最終イベントのみ出力
+            # ✅ 最終イベント出力（どの形式でも安全）
             # ----------------------------------------------------------
             if final_json:
-                text = final_json["message"]["content"][0]["text"]
+                msg = final_json.get("message", {})
+                content = msg.get("content", "")
+                text_output = ""
+
+                # contentがリストの場合
+                if isinstance(content, list) and len(content) > 0:
+                    first = content[0]
+                    if isinstance(first, dict) and "text" in first:
+                        text_output = first["text"]
+                # contentが文字列の場合
+                elif isinstance(content, str):
+                    text_output = content
+                else:
+                    text_output = json.dumps(content, ensure_ascii=False)
+
                 st.success("✅ 最終出力を取得しました")
-                text_holder.markdown(text)
+                text_holder.markdown(text_output)
                 debug_log.code(json.dumps(final_json, ensure_ascii=False, indent=2), language="json")
             else:
                 st.warning("⚠️ 有効な最終イベントを取得できませんでした。")
