@@ -1,6 +1,6 @@
 # ----------------------------------------------------------
-# ✅ frontend_filtered_safe_v2.py
-# 文字列メッセージ形式にも完全対応版
+# ✅ frontend_filtered_final.py
+# Bedrock AgentCore 二重エンコード対応（最終メッセージのみ出力）
 # ----------------------------------------------------------
 import os
 import json
@@ -89,21 +89,39 @@ if prompt := st.chat_input("質問を入力してください"):
                 except Exception:
                     continue  # 不完全JSONは無視
 
-                # 「message」キーがあるものだけ残す
                 if "message" in event:
                     final_json = event
 
             # ----------------------------------------------------------
-            # ✅ 最終イベント出力（文字列型も対応）
+            # ✅ 最終イベント出力（二重JSON対応）
             # ----------------------------------------------------------
             if final_json:
                 msg = final_json.get("message")
+                text_output = ""
 
-                # messageが文字列ならそのまま出す
+                # --- case ①: messageが文字列（中にJSONが埋まってる）
                 if isinstance(msg, str):
-                    text_output = msg
+                    try:
+                        msg_parsed = json.loads(msg)
+                        if isinstance(msg_parsed, dict):
+                            content = msg_parsed.get("content", "")
+                            if isinstance(content, list) and len(content) > 0:
+                                first = content[0]
+                                if isinstance(first, dict) and "text" in first:
+                                    text_output = first["text"]
+                                else:
+                                    text_output = json.dumps(first, ensure_ascii=False)
+                            elif isinstance(content, str):
+                                text_output = content
+                            else:
+                                text_output = json.dumps(content, ensure_ascii=False)
+                        else:
+                            text_output = str(msg)
+                    except Exception:
+                        # JSONでなければ文字列として出す
+                        text_output = msg
 
-                # messageが辞書形式なら中身を解析
+                # --- case ②: messageがdict
                 elif isinstance(msg, dict):
                     content = msg.get("content", "")
                     if isinstance(content, list) and len(content) > 0:
@@ -116,6 +134,7 @@ if prompt := st.chat_input("質問を入力してください"):
                         text_output = content
                     else:
                         text_output = json.dumps(content, ensure_ascii=False)
+
                 else:
                     text_output = str(msg)
 
