@@ -1,3 +1,7 @@
+# ----------------------------------------------------------
+# ✅ frontend.py（Claude Haiku 4.5対応 / 安全なストリーミング処理版）
+# ----------------------------------------------------------
+
 import os
 import json
 import boto3
@@ -60,6 +64,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
         st.warning("⚠️ AgentCoreランタイムARNを入力してください。")
         st.stop()
 
+    # ユーザー入力の表示
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
@@ -69,8 +74,9 @@ if prompt := st.chat_input("メッセージを入力してね"):
             debug_log = st.expander("🪵 デバッグログ（クリックで展開）")
             buffer = ""
 
-            # ✅ ConverseStream v2 形式 payload
+            # ✅ ConverseStream v2 構造
             payload = json.dumps({
+                "prompt": prompt,  # ← バックエンドの互換性維持
                 "input": {
                     "messages": [
                         {"role": "user", "content": [{"text": prompt}]}
@@ -80,6 +86,7 @@ if prompt := st.chat_input("メッセージを入力してね"):
                 "sessionAttributes": {"tavily_api_key": tavily_api_key or ""}
             })
 
+            # AgentCoreランタイム呼び出し
             response = agentcore.invoke_agent_runtime(
                 agentRuntimeArn=agent_runtime_arn,
                 payload=payload.encode("utf-8"),
@@ -89,28 +96,48 @@ if prompt := st.chat_input("メッセージを入力してね"):
 
             stream = response["response"]
 
+            # ----------------------------------------------------------
+            # ✅ 安全なストリーミング処理（型チェック付き）
+            # ----------------------------------------------------------
             for line in stream.iter_lines():
                 if not line:
                     continue
+
                 if line.startswith(b"data: "):
                     data = line.decode("utf-8")[6:]
+
                     try:
                         event = json.loads(data)
                     except Exception:
+                        # data が純テキストの場合はそのまま出力
+                        buffer += data
+                        text_holder.markdown(buffer)
                         continue
 
                     debug_log.write(event)
 
-                    # delta更新時のストリーム描画
-                    if "delta" in event:
-                        text = event["delta"].get("text", "")
-                        buffer += text
-                        text_holder.markdown(buffer)
-                    elif "event" in event and "contentBlockDelta" in event["event"]:
-                        text = event["event"]["contentBlockDelta"]["delta"].get("text", "")
-                        buffer += text
+                    # event が辞書型（通常のdeltaイベント）
+                    if isinstance(event, dict):
+                        # delta テキスト更新イベント
+                        if "delta" in event and isinstance(event["delta"], dict):
+                            text = event["delta"].get("text", "")
+                            buffer += text
+                            text_holder.markdown(buffer)
+
+                        # contentBlockDelta イベント
+                        elif "event" in event and "contentBlockDelta" in event["event"]:
+                            delta = event["event"]["contentBlockDelta"]["delta"]
+                            if isinstance(delta, dict):
+                                text = delta.get("text", "")
+                                buffer += text
+                                text_holder.markdown(buffer)
+
+                    # event が文字列型（例：「申」など）
+                    elif isinstance(event, str):
+                        buffer += event
                         text_holder.markdown(buffer)
 
+            # 出力が空の場合の警告
             if not buffer:
                 st.warning("⚠️ 応答本文が空でした。")
             else:
